@@ -1,0 +1,108 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+x-superset-environment: &superset-environment
+  PYTHONPATH: /app
+  SUPERSET_CONFIG: tests.integration_tests.superset_test_config_nunomics
+  SUPERSET__SQLALCHEMY_DATABASE_URI: sqlite:////app/superset_home/nunomics-a-metadata.db
+  SUPERSET__SQLALCHEMY_EXAMPLES_URI: sqlite:////app/superset_home/nunomics-a-examples.db
+  SUPERSET_HOME: /app/superset_home
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  DEV_MODE: "true"
+
+x-superset-volumes: &superset-volumes
+  - ./docker:/app/docker
+  - ./superset:/app/superset
+  - ./superset-core:/app/superset-core
+  - ./superset-frontend:/app/superset-frontend
+  - ./tests:/app/tests
+  - nunomics_a_home:/app/superset_home
+
+x-superset-build: &superset-build
+  context: .
+  target: dev
+  args:
+    DEV_MODE: "true"
+    INCLUDE_CHROMIUM: "false"
+    INCLUDE_FIREFOX: "false"
+
+services:
+  redis:
+    image: redis:7
+
+  superset-init:
+    build: *superset-build
+    environment: *superset-environment
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        /app/docker/docker-bootstrap.sh &&
+        superset db upgrade &&
+        superset load-test-users &&
+        superset load-examples --load-test-data &&
+        superset init
+    depends_on:
+      - redis
+    volumes: *superset-volumes
+
+  superset:
+    build: *superset-build
+    environment: *superset-environment
+    command: ["/app/docker/docker-bootstrap.sh", "app"]
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:19088:8088"
+    volumes: *superset-volumes
+
+  superset-node:
+    build:
+      context: .
+      target: superset-node
+      args:
+        DEV_MODE: "true"
+    mem_limit: 4g
+    memswap_limit: 5g
+    cpus: 2
+    environment:
+      BABEL_ENV: development
+      NODE_ENV: development
+      PLAYWRIGHT_BASE_URL: http://superset:8088/
+      WEBPACK_DISABLE_CLIENT_OVERLAY: "true"
+      WEBPACK_DEVTOOL: "false"
+      WEBPACK_DEVSERVER_HOST: 0.0.0.0
+      WEBPACK_DISABLE_TYPE_CHECKING: "true"
+      superset: http://superset:8088
+    command:
+      - /bin/bash
+      - -c
+      - >-
+        test -x node_modules/.bin/webpack-dev-server || npm install &&
+        exec node --max_old_space_size=3072
+        ./node_modules/webpack-dev-server/bin/webpack-dev-server.js
+        --mode=development
+    depends_on:
+      - superset
+    ports:
+      - "127.0.0.1:19000:9000"
+    volumes: *superset-volumes
+
+volumes:
+  nunomics_a_home:
